@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 #include <iostream>
 #include <map>
+#include <numeric> // for accumelate
 #include <spdlog/spdlog.h>
 #include <sqlitelib.h>
 #include <stdlib.h>
@@ -157,266 +158,166 @@ void my_stbtt_print(
     glDisable(GL_TEXTURE_2D);
 }
 
-class Console
-{
-public:
-    Console();
-
-    void OpenFile(
-        const std::string &filename);
-
-    void Resize(
-        float width,
-        float height);
-
-    void Render();
-
-    void AddChar(
-        unsigned int c);
-
-    void Backspace();
-
-    void Enter();
-
-    void Scroll(
-        float amount);
-
-    void ScrollTo(
-        int position);
-
-    float Margin() const { return _margin; }
-
-private:
-    std::vector<std::string> _lines;
-    std::string _input;
-    float _scroll = 0;
-    float _margin = 30;
-    std::vector<char> _fileData;
-    std::vector<size_t> _lineStarts;
-    float _sbStart = 100;
-    float _sbHeight = 100;
-    float _width = 0, _height = 0;
-
-    float LineHeight() const
-    {
-        return fontSize * 1.2f;
-    }
-
-    float ContentHeight() const
-    {
-        return _lineStarts.size() * LineHeight();
-    }
-
-    void SetScroll(
-        float scroll);
-
-    void RecalcScrolBar();
-};
-
-Console::Console()
-{
-    _lines.push_back("hit ` to toggle this console");
-}
-
-void Console::OpenFile(
-    const std::string &filename)
-{
-    std::ifstream ifs(filename, std::ifstream::in);
-
-    char c = ifs.get();
-
-    while (ifs.good())
-    {
-        if (c == '\n')
-        {
-            _lineStarts.push_back(_fileData.size());
-        }
-
-        _fileData.push_back(c);
-
-        c = ifs.get();
-    }
-
-    ifs.close();
-
-    RecalcScrolBar();
-}
-
-void Console::SetScroll(
-    float scroll)
-{
-    _scroll = scroll;
-
-    if (_scroll > 0)
-    {
-        _scroll = 0;
-    }
-
-    auto contentHeight = ContentHeight() - LineHeight();
-    if (_scroll < -contentHeight)
-    {
-        _scroll = -contentHeight;
-    }
-
-    RecalcScrolBar();
-}
-
-void Console::Scroll(
-    float amount)
-{
-    SetScroll(_scroll + (amount * 3) * LineHeight());
-}
-
-void Console::ScrollTo(
-    int position)
-{
-    auto aspect = ((position - _sbHeight / 2.0f) / _height);
-
-    SetScroll(-(ContentHeight() * aspect));
-}
-
-void Console::RecalcScrolBar()
-{
-    auto contentHeight = ContentHeight();
-    auto sbAspect = _height / contentHeight;
-    _sbHeight = _height * sbAspect;
-    _sbStart = -_scroll * sbAspect;
-}
-
-void Console::Resize(
-    float width,
-    float height)
-{
-    _width = width;
-    _height = height;
-
-    RecalcScrolBar();
-}
-
-void Console::Render()
-{
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-
-    glActiveTextureARB(GL_TEXTURE1);
-    glDisable(GL_TEXTURE_2D);
-
-    glActiveTextureARB(GL_TEXTURE0);
-    glDisable(GL_TEXTURE_2D);
-
-    auto textHeight = (_lineStarts.size() + 1) * LineHeight();
-    auto lineNumberWidth = my_stbtt_print_width(std::to_string(_lineStarts.size() * 10));
-
-    glBegin(GL_QUADS);
-    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-    glVertex2f(lineNumberWidth, 0.0f);
-    glVertex2f(_width - _margin, 0.0f);
-    glVertex2f(_width - _margin, _height);
-    glVertex2f(lineNumberWidth, _height);
-    glEnd();
-
-    glTranslatef(0, _scroll, 0);
-
-    auto textColor = glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
-    auto lineNumberColor = glm::vec4(0.1f, 0.4f, 0.8f, 1.0f);
-
-    float y = 0;
-    int lineIndex = 1;
-    size_t prevLineStart = -1;
-    for (auto line = _lineStarts.begin(); line != _lineStarts.end(); line++, lineIndex++)
-    {
-        y += LineHeight();
-
-        if ((y + LineHeight() + LineHeight()) < -_scroll)
-        {
-            continue;
-        }
-
-        if ((y - LineHeight()) > -(_scroll - _height))
-        {
-            continue;
-        }
-
-        auto lineNumber = fmt::format("{}", lineIndex);
-        my_stbtt_print(lineNumberWidth - my_stbtt_print_width(lineNumber) - 5, y, lineNumber, lineNumberColor);
-
-        std::string s(_fileData.data() + prevLineStart + 1, _fileData.data() + *line);
-        prevLineStart = *line;
-        my_stbtt_print(10 + lineNumberWidth, y, s, textColor);
-    }
-
-    glLoadIdentity();
-
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-
-    glActiveTextureARB(GL_TEXTURE1);
-    glDisable(GL_TEXTURE_2D);
-
-    glActiveTextureARB(GL_TEXTURE0);
-    glDisable(GL_TEXTURE_2D);
-
-    glBegin(GL_QUADS);
-    glColor4f(0.0f, 0.6f, 1.0f, 0.5f);
-    glVertex2f(_width, _sbStart + _sbHeight);
-    glVertex2f(_width - _margin, _sbStart + _sbHeight);
-    glVertex2f(_width - _margin, _sbStart);
-    glVertex2f(_width, _sbStart);
-    glEnd();
-}
-
-void Console::AddChar(
-    unsigned int c)
-{
-    _input += c;
-}
-
-void Console::Backspace()
-{
-    if (_input.empty())
-    {
-        return;
-    }
-
-    _input = _input.substr(0, _input.size() - 1);
-}
-
-void Console::Enter()
-{
-    if (_input == "exit" || _input == "quit")
-    {
-        _lines.push_back("bye!");
-        running = false;
-        _input = "";
-        return;
-    }
-
-    _lines.push_back(_input);
-    _input = "";
-}
-
-static Console console;
-
 void CharCallback(
     GLFWwindow *window,
     unsigned int codepoint)
 {
     (void)window;
-
-    console.AddChar(codepoint);
+    (void)codepoint;
 }
 
 int active_cell_col = 0, active_cell_row = 0;
+int scroll_cols = 0, max_visible_col_count = 0, scroll_rows = 0, max_visible_row_count = 0;
+const int defaultcell_w = 100, defaultcell_h = 30;
+const int input_line_h = 50, header_w = 40, header_h = 30;
+const float padding = 10.0f;
+const float cell_padding = 2.0f;
+
+int w = 1024, h = 768;
+
+static std::unique_ptr<sqlitelib::Sqlite> db;
+
+std::string columnIndexToLetters(int n)
+{
+    std::string str; // To store result (Excel column name)
+    int i = 0;       // To store current index in str which is result
+
+    while (n > 0)
+    {
+        // Find remainder
+        int rem = n % 26;
+
+        // If remainder is 0, then a 'Z' must be there in output
+        if (rem == 0)
+        {
+            str += 'Z';
+            n = (n / 26) - 1;
+        }
+        else // If remainder is non-zero
+        {
+            str += (rem - 1) + 'A';
+            n = n / 26;
+        }
+    }
+
+    std::reverse(str.begin(), str.end());
+    return str;
+}
+
+void EnsureSelectionInView()
+{
+    {
+        auto cols = db->execute<int, int>("SELECT col_index, size FROM cols");
+        std::map<int, int> col_widths;
+        for (auto const &col : cols)
+        {
+            col_widths[std::get<0>(col)] = defaultcell_w + std::get<1>(col);
+        }
+        for (int i = 0; i <= active_cell_col; i++)
+        {
+            if (col_widths.count(i) > 0)
+            {
+                continue;
+            }
+            col_widths[i] = defaultcell_w;
+        }
+
+        auto total_col_width = std::accumulate(
+            col_widths.begin(),
+            col_widths.end(),
+            0,
+            [](int value, const std::map<int, int>::value_type &p) { return value + p.second; });
+
+        auto min_scroll_cols = 0;
+
+        total_col_width += header_w;
+        while (total_col_width > w)
+        {
+            total_col_width -= col_widths[min_scroll_cols];
+            min_scroll_cols++;
+        }
+
+        if (scroll_cols < min_scroll_cols)
+        {
+            scroll_cols = min_scroll_cols;
+        }
+        else if (scroll_cols > active_cell_col)
+        {
+            scroll_cols = active_cell_col;
+        }
+
+        max_visible_col_count = 0;
+        int x = header_w;
+        while (x < w)
+        {
+            if (col_widths.count(scroll_cols + max_visible_col_count) == 1)
+            {
+                x += col_widths[scroll_cols + max_visible_col_count];
+            }
+            else
+            {
+                x += defaultcell_w;
+            }
+            max_visible_col_count++;
+        }
+    }
+
+    {
+        auto rows = db->execute<int, int>("SELECT row_index, size FROM rows");
+        std::map<int, int> row_widths;
+        for (auto const &row : rows)
+        {
+            row_widths[std::get<0>(row)] = defaultcell_h + std::get<1>(row);
+        }
+        for (int i = 0; i <= active_cell_row; i++)
+        {
+            if (row_widths.count(i) > 0)
+            {
+                continue;
+            }
+            row_widths[i] = defaultcell_h;
+        }
+
+        auto total_row_size = std::accumulate(
+            row_widths.begin(),
+            row_widths.end(),
+            0,
+            [](int value, const std::map<int, int>::value_type &p) { return value + p.second; });
+
+        auto min_scroll_rows = 0;
+
+        total_row_size += input_line_h + header_h;
+        while (total_row_size > h)
+        {
+            total_row_size -= row_widths[min_scroll_rows];
+            min_scroll_rows++;
+        }
+
+        if (scroll_rows < min_scroll_rows)
+        {
+            scroll_rows = min_scroll_rows;
+        }
+        else if (scroll_rows > active_cell_row)
+        {
+            scroll_rows = active_cell_row;
+        }
+
+        max_visible_row_count = 0;
+        int y = input_line_h + header_h;
+        while (y < h)
+        {
+            if (row_widths.count(scroll_rows + max_visible_row_count) == 1)
+            {
+                y += row_widths[scroll_rows + max_visible_row_count];
+            }
+            else
+            {
+                y += defaultcell_h;
+            }
+            max_visible_row_count++;
+        }
+    }
+}
 
 void MoveSelectionLeft()
 {
@@ -426,11 +327,15 @@ void MoveSelectionLeft()
     {
         active_cell_col = 0;
     }
+
+    EnsureSelectionInView();
 }
 
 void MoveSelectionRight()
 {
     active_cell_col++;
+
+    EnsureSelectionInView();
 }
 
 void MoveSelectionUp()
@@ -441,11 +346,15 @@ void MoveSelectionUp()
     {
         active_cell_row = 0;
     }
+
+    EnsureSelectionInView();
 }
 
 void MoveSelectionDown()
 {
     active_cell_row++;
+
+    EnsureSelectionInView();
 }
 
 void KeyCallback(
@@ -461,11 +370,9 @@ void KeyCallback(
 
     if (key == GLFW_KEY_BACKSPACE && (action == GLFW_PRESS || action == GLFW_REPEAT))
     {
-        console.Backspace();
     }
     else if (key == GLFW_KEY_ENTER && (action == GLFW_PRESS || action == GLFW_REPEAT))
     {
-        console.Enter();
     }
     else if (key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE)
     {
@@ -495,10 +402,7 @@ void ScrollCallback(
     double xoffset,
     double yoffset)
 {
-    console.Scroll(float(yoffset));
 }
-
-int w = 1024, h = 768;
 
 void ResizeCallback(
     GLFWwindow *window,
@@ -507,8 +411,6 @@ void ResizeCallback(
 {
     w = width;
     h = height;
-
-    console.Resize(float(w), float(h));
 }
 
 static bool sbDragging = false;
@@ -522,10 +424,8 @@ void MouseButtonCallback(
     double x, y;
     glfwGetCursorPos(window, &x, &y);
 
-    if (x >= w - console.Margin() && x < w)
+    if (x >= w - 30 && x < w)
     {
-        console.ScrollTo(int(y));
-
         sbDragging = (action == GLFW_PRESS);
     }
 
@@ -542,7 +442,6 @@ void CursorPosCallback(
 {
     if (sbDragging)
     {
-        console.ScrollTo(int(y));
     }
 }
 
@@ -589,6 +488,16 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
         db->execute(R"(DELETE FROM cols;)");
         db->execute(R"(INSERT INTO cols (col_index, size) VALUES (3, 140);)");
         db->execute(R"(INSERT INTO cols (col_index, size) VALUES (5, 300);)");
+
+        db->execute(R"(DELETE FROM rows;)");
+        db->execute(R"(INSERT INTO rows (row_index, size) VALUES (3, 60);)");
+        db->execute(R"(INSERT INTO rows (row_index, size) VALUES (5, 80);)");
+
+        db->execute(R"(DELETE FROM cells;)");
+        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (0, 0, '0');)");
+        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (1, 1, '1');)");
+        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (3, 6, 'test');)");
+        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (2, 8, 'fout');)");
     }
     catch (const std::exception &ex)
     {
@@ -605,33 +514,6 @@ std::pair<int, int> pair_from_tuple(const std::tuple<int, int> &tuple)
 
 #define MAX
 
-std::string columnIndexToLetters(int n)
-{
-    std::string str; // To store result (Excel column name)
-    int i = 0;       // To store current index in str which is result
-
-    while (n > 0)
-    {
-        // Find remainder
-        int rem = n % 26;
-
-        // If remainder is 0, then a 'Z' must be there in output
-        if (rem == 0)
-        {
-            str += 'Z';
-            n = (n / 26) - 1;
-        }
-        else // If remainder is non-zero
-        {
-            str += (rem - 1) + 'A';
-            n = n / 26;
-        }
-    }
-
-    std::reverse(str.begin(), str.end());
-    return str;
-}
-
 void renderSheet(
     std::unique_ptr<sqlitelib::Sqlite> &db,
     int atx,
@@ -644,7 +526,6 @@ void renderSheet(
 
         auto cols = db->execute<int, int>("SELECT col_index, size FROM cols");
         auto rows = db->execute<int, int>("SELECT row_index, size FROM rows");
-        auto cells = db->execute<int, int, std::string>("SELECT col, row, tmp_value FROM cells");
 
         std::map<int, int> cols_map, rows_map;
 
@@ -658,36 +539,61 @@ void renderSheet(
             rows_map.insert(pair_from_tuple(e));
         }
 
-        const int defaultcol_w = 100, defaultcol_h = 30;
-        const int header_w = 40, header_h = 30;
-        int i = 0, x = header_w, y = header_h + 1;
+        int x = header_w, y = input_line_h + header_h + 1;
         glBegin(GL_QUADS);
         glColor3f(0.85f, 0.85f, 0.85f);
 
         glVertex2f(0.0f, 0.0f);
         glVertex2f(w, 0.0f);
-        glVertex2f(w, header_h);
-        glVertex2f(0.0f, header_h);
+        glVertex2f(w, input_line_h + header_h);
+        glVertex2f(0.0f, input_line_h + header_h);
 
-        glVertex2f(0.0f, 0.0f);
-        glVertex2f(header_w, 0.0f);
-        glVertex2f(header_w, h);
-        glVertex2f(0.0f, h);
+        glVertex2f(0.0f, input_line_h);
+        glVertex2f(header_w, input_line_h);
+        glVertex2f(header_w, input_line_h + h);
+        glVertex2f(0.0f, input_line_h + h);
+
+        glColor3f(1.0f, 1.0f, 1.0f);
+
+        // Render input line
+        auto strwidth = my_stbtt_print_width(">_");
+        auto input_line_offset = strwidth + padding + padding;
+        glVertex2f(input_line_offset, padding);
+        glVertex2f(w, padding);
+        glVertex2f(w, input_line_h - padding);
+        glVertex2f(input_line_offset, input_line_h - padding);
         glEnd();
+
+        my_stbtt_print(
+            padding,
+            (input_line_h + padding) / 2.0f,
+            ">_",
+            glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
+
+        auto tmp_value = db->execute_value<std::string>("SELECT tmp_value FROM cells WHERE col = ? and row = ?", active_cell_col, active_cell_row);
+
+        my_stbtt_print(
+            input_line_offset + padding,
+            (input_line_h + padding) / 2.0f,
+            tmp_value,
+            glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
 
         glBegin(GL_LINES);
         glColor3f(0.79f, 0.79f, 0.79f);
         auto selected_x = 0, selected_y = 0;
         auto selected_w = 0, selected_h = 0;
+
+        // Render col lines
+        int i = scroll_cols;
         while (x < w)
         {
             if (i == active_cell_col)
             {
                 selected_x = x;
-                selected_w = defaultcol_w;
+                selected_w = defaultcell_w;
             }
 
-            glVertex2f(float(x), 0.0f);
+            glVertex2f(float(x), input_line_h);
             glVertex2f(float(x), float(h));
 
             auto colw = cols_map.find(i);
@@ -695,26 +601,27 @@ void renderSheet(
             {
                 if (i == active_cell_col)
                 {
-                    selected_w = colw->second;
+                    selected_w = defaultcell_w + colw->second;
                 }
 
-                x += colw->second;
+                x += defaultcell_w + colw->second;
             }
             else
             {
-                x += defaultcol_w;
+                x += defaultcell_w;
             }
 
             i++;
         }
 
-        i = 0;
+        // Render row lines
+        i = scroll_rows;
         while (y < h)
         {
             if (i == active_cell_row)
             {
                 selected_y = y;
-                selected_h = defaultcol_h;
+                selected_h = defaultcell_h;
             }
 
             glVertex2f(0.0f, float(y));
@@ -725,20 +632,147 @@ void renderSheet(
             {
                 if (i == active_cell_row)
                 {
-                    selected_h = rowh->second;
+                    selected_h = defaultcell_h + rowh->second;
                 }
 
-                y += rowh->second;
+                y += defaultcell_h + rowh->second;
             }
             else
             {
-                y += defaultcol_h;
+                y += defaultcell_h;
             }
 
             i++;
         }
         glEnd();
 
+        // Render col names
+        i = scroll_cols, x = header_w, y = input_line_h;
+        while (x < w)
+        {
+            auto fromx = x;
+
+            auto colw = cols_map.find(i);
+            if (colw != cols_map.end())
+            {
+                x += defaultcell_w + colw->second;
+            }
+            else
+            {
+                x += defaultcell_w;
+            }
+
+            i++;
+
+            auto fpsstr = columnIndexToLetters(i);
+            auto strwidth = my_stbtt_print_width(fpsstr);
+
+            my_stbtt_print(
+                fromx + ((x - fromx) / 2.0f) - (strwidth / 2.0f),
+                input_line_h + fontSize * 1.2f,
+                fpsstr,
+                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
+        }
+
+        // Render row #
+        i = scroll_rows, x = 0, y = input_line_h + header_h;
+        while (y < h)
+        {
+            glVertex2f(0.0f, float(y));
+            glVertex2f(float(w), float(y));
+
+            auto fromy = y;
+            auto rowh = rows_map.find(i);
+            if (rowh != rows_map.end())
+            {
+                y += defaultcell_h + rowh->second;
+            }
+            else
+            {
+                y += defaultcell_h;
+            }
+
+            i++;
+
+            auto fpsstr = fmt::format("{}", i);
+            auto strwidth = my_stbtt_print_width(fpsstr);
+
+            my_stbtt_print(
+                (header_w / 2.0f) - (strwidth / 2.0f),
+                fromy + (fontSize * 1.2f),
+                fpsstr,
+                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
+        }
+
+        // Select all cells in view
+        auto cells = db->execute<int, int, std::string>(
+            "SELECT col, row, tmp_value FROM cells WHERE col BETWEEN ? AND ? AND row BETWEEN ? AND ?",
+            scroll_cols,
+            scroll_cols + max_visible_col_count,
+            scroll_rows,
+            scroll_rows + max_visible_row_count);
+
+        // Render all cells in view
+        for (auto const &cell : cells)
+        {
+            const int col = std::get<0>(cell);
+            const int row = std::get<1>(cell);
+            const std::string value = std::get<2>(cell);
+
+            int cell_x = (col * defaultcell_w) + db->execute_value<int>("SELECT SUM(size) FROM cols WHERE col_index < ?", col);
+            int scroll_x = (scroll_cols * defaultcell_w) + db->execute_value<int>("SELECT SUM(size) FROM cols WHERE col_index < ?", scroll_cols);
+            int cell_y = (row * defaultcell_h) + db->execute_value<int>("SELECT SUM(size) FROM rows WHERE row_index < ?", row);
+            int scroll_y = (scroll_rows * defaultcell_h) + db->execute_value<int>("SELECT SUM(size) FROM rows WHERE row_index < ?", scroll_rows);
+
+            my_stbtt_print(
+                header_w + cell_x - scroll_x + cell_padding,
+                input_line_h + header_h + cell_y - scroll_y + fontSize * 1.2f,
+                value,
+                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
+        }
+
+        // Render selected col header
+        glBegin(GL_TRIANGLE_FAN);
+        glColor3f(0.4f, 0.55f, 0.65f);
+        glVertex2f(selected_x, input_line_h);
+        glVertex2f(selected_x + selected_w, input_line_h);
+        glVertex2f(selected_x + selected_w, input_line_h + header_h);
+        glVertex2f(selected_x, input_line_h + header_h);
+        glEnd();
+
+        {
+            auto fpsstr = columnIndexToLetters(active_cell_col + 1);
+            auto strwidth = my_stbtt_print_width(fpsstr);
+
+            my_stbtt_print(
+                selected_x + (selected_w / 2.0f) - (strwidth / 2.0f),
+                input_line_h + fontSize * 1.2f,
+                fpsstr,
+                glm::vec4(1.0f, 1.0f, 1.0, 1.0f));
+        }
+
+        // Render selected row header
+        glBegin(GL_TRIANGLE_FAN);
+        glColor3f(0.4f, 0.55f, 0.65f);
+        glVertex2f(0, selected_y);
+        glVertex2f(header_w, selected_y);
+        glVertex2f(header_w, selected_y + selected_h);
+        glVertex2f(0, selected_y + selected_h);
+        glEnd();
+
+        {
+            auto fpsstr = fmt::format("{}", active_cell_row + 1);
+            auto strwidth = my_stbtt_print_width(fpsstr);
+
+            my_stbtt_print(
+                (header_w / 2.0f) - (strwidth / 2.0f),
+                selected_y + (fontSize * 1.2f),
+                fpsstr,
+                glm::vec4(1.0f, 1.0f, 1.0, 1.0f));
+        }
+
+        // Render selected cell
+        glLineWidth(1.0f);
         glBegin(GL_LINES);
         glColor3f(0.4f, 0.55f, 0.65f);
 
@@ -767,63 +801,6 @@ void renderSheet(
         glVertex2f(selected_x + 1, selected_y + 1);
 
         glEnd();
-        glLineWidth(1.0f);
-
-        i = 0, x = header_w, y = 0;
-        while (x < w)
-        {
-            auto fromx = x;
-
-            auto colw = cols_map.find(i);
-            if (colw != cols_map.end())
-            {
-                x += colw->second;
-            }
-            else
-            {
-                x += defaultcol_w;
-            }
-
-            i++;
-
-            auto fpsstr = columnIndexToLetters(i);
-            auto strwidth = my_stbtt_print_width(fpsstr);
-
-            my_stbtt_print(
-                fromx + ((x - fromx) / 2.0f) - (strwidth / 2.0f),
-                fontSize * 1.2f,
-                fpsstr,
-                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
-        }
-
-        i = 0, x = 0, y = header_h;
-        while (y < h)
-        {
-            glVertex2f(0.0f, float(y));
-            glVertex2f(float(w), float(y));
-
-            auto fromy = y;
-            auto rowh = rows_map.find(i);
-            if (rowh != rows_map.end())
-            {
-                y += rowh->second;
-            }
-            else
-            {
-                y += defaultcol_h;
-            }
-
-            i++;
-
-            auto fpsstr = fmt::format("{}", i);
-            auto strwidth = my_stbtt_print_width(fpsstr);
-
-            my_stbtt_print(
-                (header_w / 2.0f) - (strwidth / 2.0f),
-                fromy + (fontSize * 1.2f),
-                fpsstr,
-                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
-        }
     }
     catch (const std::exception &ex)
     {
@@ -835,12 +812,7 @@ int main(
     int argc,
     char *argv[])
 {
-    if (argc > 1)
-    {
-        console.OpenFile(argv[1]);
-    }
-
-    auto db = InitDb();
+    db = InitDb();
 
     glfwInit();
 
@@ -874,12 +846,12 @@ int main(
 
     my_stbtt_initfont();
 
+    EnsureSelectionInView();
+
     glClearColor(0.95f, 0.95f, 0.95f, 1.0f);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-
-    console.Resize(float(w), float(h));
 
     double time = glfwGetTime();
     double prevTime = time;
@@ -937,8 +909,8 @@ int main(
         auto fpsstr = fmt::format("fps: {:.2f}", realFps);
 
         my_stbtt_print(
-            w - my_stbtt_print_width(fpsstr) - (fontSize * 0.4f) - console.Margin(),
-            fontSize * 1.2f,
+            w - my_stbtt_print_width(fpsstr) - (fontSize * 0.4f) - 30,
+            (input_line_h + padding) / 2.0f,
             fpsstr,
             glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
 
