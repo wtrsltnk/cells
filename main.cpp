@@ -465,6 +465,17 @@ std::map<int, int> select_into_map(
     return map;
 }
 
+bool IsHoveringInputLine(
+    int x,
+    int y)
+{
+    auto strwidth = my_stbtt_print_width(">_");
+    auto input_line_offset = strwidth + padding + padding;
+    if (x < input_line_offset || y < padding || y > input_line_h - padding) return false;
+
+    return true;
+}
+
 bool GetColWidthHandle(
     int x,
     int y,
@@ -718,6 +729,10 @@ void MouseButtonCallback(
     }
 }
 
+static GLFWcursor *colSizeCursor = nullptr;
+static GLFWcursor *rowSizeCursor = nullptr;
+static GLFWcursor *inputLineCursor = nullptr;
+
 void CursorPosCallback(
     GLFWwindow *window,
     double x,
@@ -731,10 +746,48 @@ void CursorPosCallback(
     {
         colDraggingX = x;
     }
-
-    if (rowDragging >= 0)
+    else if (rowDragging >= 0)
     {
         rowDraggingY = y;
+    }
+    else
+    {
+        int col, row;
+        if (GetColWidthHandle(x, y, col))
+        {
+            if (colSizeCursor == nullptr)
+            {
+                colSizeCursor = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
+            }
+
+            glfwSetCursor(window, colSizeCursor);
+
+            return;
+        }
+        else if (GetRowHeightHandle(x, y, row))
+        {
+            if (rowSizeCursor == nullptr)
+            {
+                rowSizeCursor = glfwCreateStandardCursor(GLFW_VRESIZE_CURSOR);
+            }
+
+            glfwSetCursor(window, rowSizeCursor);
+
+            return;
+        }
+        else if (IsHoveringInputLine(x, y))
+        {
+            if (inputLineCursor == nullptr)
+            {
+                inputLineCursor = glfwCreateStandardCursor(GLFW_IBEAM_CURSOR);
+            }
+
+            glfwSetCursor(window, inputLineCursor);
+        }
+        else
+        {
+            glfwSetCursor(window, nullptr);
+        }
     }
 }
 
@@ -1211,6 +1264,21 @@ int main(
 
         using namespace std::chrono_literals;
         std::this_thread::sleep_for(5ms);
+    }
+
+    if (colSizeCursor != nullptr)
+    {
+        glfwDestroyCursor(colSizeCursor);
+    }
+
+    if (rowSizeCursor != nullptr)
+    {
+        glfwDestroyCursor(rowSizeCursor);
+    }
+
+    if (inputLineCursor != nullptr)
+    {
+        glfwDestroyCursor(inputLineCursor);
     }
 
     glfwTerminate();
