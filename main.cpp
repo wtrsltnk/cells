@@ -5,7 +5,9 @@
  * Created on April 8, 2009, 8:29 PM
  */
 
-#include "opengl.h"
+#include <glad/glad.h>
+
+#include <GLFW/glfw3.h>
 
 #include "stb_truetype.h"
 
@@ -180,7 +182,6 @@ static std::unique_ptr<sqlitelib::Sqlite> db;
 std::string columnIndexToLetters(int n)
 {
     std::string str; // To store result (Excel column name)
-    int i = 0;       // To store current index in str which is result
 
     while (n > 0)
     {
@@ -402,6 +403,34 @@ void ScrollCallback(
     double xoffset,
     double yoffset)
 {
+    (void)window;
+
+    if (xoffset < 0)
+    {
+        scroll_cols++;
+    }
+    else if (xoffset > 0)
+    {
+        scroll_cols--;
+    }
+    else if (yoffset < 0)
+    {
+        scroll_rows++;
+    }
+    else if (yoffset > 0)
+    {
+        scroll_rows--;
+    }
+
+    if (scroll_rows < 0)
+    {
+        scroll_rows = 0;
+    }
+
+    if (scroll_cols < 0)
+    {
+        scroll_cols = 0;
+    }
 }
 
 void ResizeCallback(
@@ -409,11 +438,227 @@ void ResizeCallback(
     int width,
     int height)
 {
+    (void)window;
+
     w = width;
     h = height;
 }
 
-static bool sbDragging = false;
+std::pair<int, int> pair_from_tuple(
+    const std::tuple<int, int> &tuple)
+{
+    return std::make_pair(std::get<0>(tuple), std::get<1>(tuple));
+}
+
+std::map<int, int> select_into_map(
+    const char *query)
+{
+    auto cols = db->execute<int, int>(query);
+
+    std::map<int, int> map;
+
+    for (auto const &e : cols)
+    {
+        map.insert(pair_from_tuple(e));
+    }
+
+    return map;
+}
+
+bool GetColWidthHandle(
+    int x,
+    int y,
+    int &out_col)
+{
+    x -= header_w;
+
+    if (x < 0 || y < input_line_h || y > (input_line_h + header_h))
+    {
+        return false;
+    }
+
+    auto cols_map = select_into_map("SELECT col_index, size FROM cols");
+
+    int col = scroll_cols;
+    int sum_colwidths = 0;
+
+    while (true)
+    {
+        auto colw = cols_map.find(col);
+        if (colw != cols_map.end())
+        {
+            sum_colwidths += defaultcell_w + colw->second;
+        }
+        else
+        {
+            sum_colwidths += defaultcell_w;
+        }
+
+        if (std::abs(x - sum_colwidths) < 4)
+        {
+            out_col = col;
+            return true;
+        }
+
+        if (x - sum_colwidths < 0)
+        {
+            break;
+        }
+
+        col++;
+    }
+
+    return false;
+}
+
+bool GetRowHeightHandle(
+    int x,
+    int y,
+    int &out_row)
+{
+    y -= input_line_h;
+    y -= header_h;
+
+    if (y < 0 || x < 0 || x > header_w)
+    {
+        return false;
+    }
+
+    auto rows_map = select_into_map("SELECT row_index, size FROM rows");
+
+    int row = scroll_rows;
+    int sum_rowheights = 0;
+
+    while (true)
+    {
+        auto size = rows_map.find(row);
+        if (size != rows_map.end())
+        {
+            sum_rowheights += defaultcell_h + size->second;
+        }
+        else
+        {
+            sum_rowheights += defaultcell_h;
+        }
+
+        if (std::abs(y - sum_rowheights) < 4)
+        {
+            out_row = row;
+            return true;
+        }
+
+        if (y - sum_rowheights < 0)
+        {
+            break;
+        }
+
+        row++;
+    }
+
+    return false;
+}
+
+bool GetCellFromScreenPos(
+    int x,
+    int y,
+    int &out_col,
+    int &out_row)
+{
+    x -= header_w;
+    y -= input_line_h;
+    y -= header_h;
+
+    if (x < 0 || y < 0)
+    {
+        return false;
+    }
+
+    auto cols_map = select_into_map("SELECT col_index, size FROM cols");
+    auto rows_map = select_into_map("SELECT row_index, size FROM rows");
+
+    int col = scroll_cols;
+    int row = scroll_rows;
+
+    while (true)
+    {
+        auto colw = cols_map.find(col);
+        if (colw != cols_map.end())
+        {
+            x -= defaultcell_w + colw->second;
+        }
+        else
+        {
+            x -= defaultcell_w;
+        }
+
+        if (x < 0)
+        {
+            break;
+        }
+
+        col++;
+    }
+
+    while (true)
+    {
+        auto rowh = rows_map.find(row);
+        if (rowh != rows_map.end())
+        {
+            y -= defaultcell_h + rowh->second;
+        }
+        else
+        {
+            y -= defaultcell_h;
+        }
+
+        if (y < 0)
+        {
+            break;
+        }
+
+        row++;
+    }
+
+    out_col = col;
+    out_row = row;
+
+    return true;
+}
+
+void ChangeColWidth(
+    int col,
+    int offset)
+{
+    auto newOffset = db->execute_value<int>("SELECT size FROM cols WHERE col_index = ?", col) + offset;
+
+    if (defaultcell_w + newOffset < 0)
+    {
+        newOffset = -(defaultcell_w - 5);
+    }
+
+    db->execute(R"(REPLACE INTO cols (col_index, size) VALUES (?, ?);)", col, newOffset);
+}
+
+void ChangeRowHeight(
+    int row,
+    int offset)
+{
+    auto newOffset = db->execute_value<int>("SELECT size FROM rows WHERE row_index = ?", row) + offset;
+
+    if (defaultcell_h + newOffset < 0)
+    {
+        newOffset = -(defaultcell_h - 5);
+    }
+
+    db->execute(R"(REPLACE INTO rows (row_index, size) VALUES (?, ?);)", row, newOffset);
+}
+
+static int colDragging = -1;
+static int colDraggingX = -1;
+static int colDraggingStartX = -1;
+static int rowDragging = -1;
+static int rowDraggingY = -1;
+static int rowDraggingStartY = -1;
 
 void MouseButtonCallback(
     GLFWwindow *window,
@@ -421,17 +666,55 @@ void MouseButtonCallback(
     int action,
     int mods)
 {
+    (void)button;
+    (void)mods;
+
     double x, y;
     glfwGetCursorPos(window, &x, &y);
 
-    if (x >= w - 30 && x < w)
+    if (action == GLFW_PRESS)
     {
-        sbDragging = (action == GLFW_PRESS);
+        int col, row;
+        if (GetCellFromScreenPos(x, y, col, row))
+        {
+            active_cell_col = col;
+            active_cell_row = row;
+            return;
+        }
+        else if (GetColWidthHandle(x, y, col))
+        {
+            colDragging = col;
+            colDraggingX = x;
+            colDraggingStartX = x;
+            return;
+        }
+        else if (GetRowHeightHandle(x, y, row))
+        {
+            rowDragging = row;
+            rowDraggingY = y;
+            rowDraggingStartY = y;
+
+            return;
+        }
     }
 
     if (action == GLFW_RELEASE)
     {
-        sbDragging = false;
+        if (colDragging >= 0)
+        {
+            ChangeColWidth(colDragging, colDraggingX - colDraggingStartX);
+        }
+        colDragging = -1;
+        colDraggingX = -1;
+        colDraggingStartX = -1;
+
+        if (rowDragging >= 0)
+        {
+            ChangeRowHeight(rowDragging, rowDraggingY - rowDraggingStartY);
+        }
+        rowDragging = -1;
+        rowDraggingY = -1;
+        rowDraggingStartY = -1;
     }
 }
 
@@ -440,8 +723,18 @@ void CursorPosCallback(
     double x,
     double y)
 {
-    if (sbDragging)
+    (void)window;
+    (void)x;
+    (void)y;
+
+    if (colDragging >= 0)
     {
+        colDraggingX = x;
+    }
+
+    if (rowDragging >= 0)
+    {
+        rowDraggingY = y;
     }
 }
 
@@ -464,16 +757,14 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
 
         db->execute(R"(
   CREATE TABLE IF NOT EXISTS cols (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    col_index INTEGER,
+    col_index INTEGER  PRIMARY KEY,
     size INTEGER
   )
 )");
 
         db->execute(R"(
   CREATE TABLE IF NOT EXISTS rows (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    row_index INTEGER,
+    row_index INTEGER PRIMARY KEY,
     size INTEGER
   )
 )");
@@ -484,14 +775,6 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
     title TEXT
   )
 )");
-
-        db->execute(R"(DELETE FROM cols;)");
-        db->execute(R"(INSERT INTO cols (col_index, size) VALUES (3, 140);)");
-        db->execute(R"(INSERT INTO cols (col_index, size) VALUES (5, 300);)");
-
-        db->execute(R"(DELETE FROM rows;)");
-        db->execute(R"(INSERT INTO rows (row_index, size) VALUES (3, 60);)");
-        db->execute(R"(INSERT INTO rows (row_index, size) VALUES (5, 80);)");
 
         db->execute(R"(DELETE FROM cells;)");
         db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (0, 0, '0');)");
@@ -507,11 +790,6 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
     return db;
 }
 
-std::pair<int, int> pair_from_tuple(const std::tuple<int, int> &tuple)
-{
-    return std::make_pair(std::get<0>(tuple), std::get<1>(tuple));
-}
-
 #define MAX
 
 void renderSheet(
@@ -524,20 +802,8 @@ void renderSheet(
     {
         glViewport(atx, 0, w - atx, h - aty);
 
-        auto cols = db->execute<int, int>("SELECT col_index, size FROM cols");
-        auto rows = db->execute<int, int>("SELECT row_index, size FROM rows");
-
-        std::map<int, int> cols_map, rows_map;
-
-        for (auto const &e : cols)
-        {
-            cols_map.insert(pair_from_tuple(e));
-        }
-
-        for (auto const &e : rows)
-        {
-            rows_map.insert(pair_from_tuple(e));
-        }
+        auto cols_map = select_into_map("SELECT col_index, size FROM cols");
+        auto rows_map = select_into_map("SELECT row_index, size FROM rows");
 
         int x = header_w, y = input_line_h + header_h + 1;
         glBegin(GL_QUADS);
@@ -614,6 +880,14 @@ void renderSheet(
             i++;
         }
 
+        if (colDraggingX >= 0)
+        {
+            glColor3f(0.3f, 0.3f, 0.3f);
+            glVertex2f(float(colDraggingX), input_line_h);
+            glVertex2f(float(colDraggingX), float(h));
+            glColor3f(0.79f, 0.79f, 0.79f);
+        }
+
         // Render row lines
         i = scroll_rows;
         while (y < h)
@@ -644,6 +918,15 @@ void renderSheet(
 
             i++;
         }
+
+        if (rowDraggingY >= 0)
+        {
+            glColor3f(0.3f, 0.3f, 0.3f);
+            glVertex2f(0.0f, float(rowDraggingY));
+            glVertex2f(float(w), float(rowDraggingY));
+            glColor3f(0.79f, 0.79f, 0.79f);
+        }
+
         glEnd();
 
         // Render col names
@@ -812,6 +1095,9 @@ int main(
     int argc,
     char *argv[])
 {
+    (void)argc;
+    (void)argv;
+
     db = InitDb();
 
     glfwInit();
