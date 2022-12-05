@@ -15,6 +15,7 @@
 #include <cmath>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <glm/glm.hpp>
 #include <iostream>
@@ -208,7 +209,17 @@ std::string columnIndexToLetters(int n)
 void EnsureSelectionInView()
 {
     {
-        auto cols = db->execute<int, int>("SELECT col_index, size FROM cols");
+        //        auto width_until_active_cell_col = (active_cell_col * defaultcell_w)
+        //                                           + db->execute_value<int>("SELECT SUM(size) FROM cols WHERE col_index <= ?", active_cell_col);
+        //        auto width_until_scroll_cols = (scroll_cols * defaultcell_w)
+        //                                       + db->execute_value<int>("SELECT SUM(size) FROM cols WHERE col_index <= ?", scroll_cols);
+
+        //        if (active_cell_col < scroll_cols)
+        //        {
+        //            scroll_cols = active_cell_col;
+        //        }
+
+        auto cols = db->execute<int, int>("SELECT col_index, size FROM cols;");
         std::map<int, int> col_widths;
         for (auto const &col : cols)
         {
@@ -227,7 +238,13 @@ void EnsureSelectionInView()
             col_widths.begin(),
             col_widths.end(),
             0,
-            [](int value, const std::map<int, int>::value_type &p) { return value + p.second; });
+            [](int value, const std::map<int, int>::value_type &p) {
+                if (p.first > active_cell_col)
+                {
+                    return value;
+                }
+                return value + p.second;
+            });
 
         auto min_scroll_cols = 0;
 
@@ -238,14 +255,16 @@ void EnsureSelectionInView()
             min_scroll_cols++;
         }
 
+        std::cout << min_scroll_cols << std::endl;
         if (scroll_cols < min_scroll_cols)
         {
             scroll_cols = min_scroll_cols;
         }
-        else if (scroll_cols > active_cell_col)
+        else if (scroll_cols >= active_cell_col)
         {
             scroll_cols = active_cell_col;
         }
+        std::cout << "scroll_cols: " << scroll_cols << std::endl;
 
         max_visible_col_count = 0;
         int x = header_w;
@@ -283,7 +302,13 @@ void EnsureSelectionInView()
             row_widths.begin(),
             row_widths.end(),
             0,
-            [](int value, const std::map<int, int>::value_type &p) { return value + p.second; });
+            [](int value, const std::map<int, int>::value_type &p) {
+                if (p.first > active_cell_row)
+                {
+                    return value;
+                }
+                return value + p.second;
+            });
 
         auto min_scroll_rows = 0;
 
@@ -298,7 +323,7 @@ void EnsureSelectionInView()
         {
             scroll_rows = min_scroll_rows;
         }
-        else if (scroll_rows > active_cell_row)
+        else if (scroll_rows >= active_cell_row)
         {
             scroll_rows = active_cell_row;
         }
@@ -793,25 +818,26 @@ void CursorPosCallback(
 
 std::unique_ptr<sqlitelib::Sqlite> InitDb()
 {
-    auto db = std::make_unique<sqlitelib::Sqlite>("./test.db");
+    auto db = std::make_unique<sqlitelib::Sqlite>(":memory:");
 
     try
     {
         db->execute(R"(
   CREATE TABLE IF NOT EXISTS cells (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     col INTEGER,
     row INTEGER,
     function TEXT,
     tmp_value TEXT,
-    sheet INTEGER
+    sheet INTEGER,
+    PRIMARY KEY (col, row)
   )
 )");
 
         db->execute(R"(
   CREATE TABLE IF NOT EXISTS cols (
     col_index INTEGER  PRIMARY KEY,
-    size INTEGER
+    size INTEGER,
+    header TEXT
   )
 )");
 
@@ -828,12 +854,6 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
     title TEXT
   )
 )");
-
-        db->execute(R"(DELETE FROM cells;)");
-        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (0, 0, '0');)");
-        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (1, 1, '1');)");
-        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (3, 6, 'test');)");
-        db->execute(R"(INSERT INTO cells (col, row, tmp_value) VALUES (2, 8, 'fout');)");
     }
     catch (const std::exception &ex)
     {
@@ -843,7 +863,43 @@ std::unique_ptr<sqlitelib::Sqlite> InitDb()
     return db;
 }
 
-#define MAX
+#include <rapidcsv.h>
+
+void LoadFileIntoDb(
+    const std::string &filename,
+    bool fileNameFirstLineHeader)
+{
+    if (!std::filesystem::exists(filename))
+    {
+        std::cerr << "Input file does not exists: " << filename << std::endl;
+        return;
+    }
+
+    rapidcsv::Document doc(
+        filename,
+        rapidcsv::LabelParams(fileNameFirstLineHeader ? 0 : -1, -1),
+        rapidcsv::SeparatorParams(','));
+
+    auto columnNames = doc.GetColumnNames();
+
+    db->execute("DELETE FROM cols;");
+    db->execute("DELETE FROM rows;");
+    for (size_t c = 0; c < columnNames.size(); c++)
+    {
+        db->execute("INSERT INTO cols (col_index, size, header) VALUES (?, 0, ?);", c, columnNames[c]);
+    }
+
+    db->execute("DELETE FROM cells;");
+    for (size_t r = 0; r < doc.GetRowCount(); r++)
+    {
+        auto row = doc.GetRow<std::string>(r);
+
+        for (size_t c = 0; c < row.size(); c++)
+        {
+            db->execute("INSERT INTO cells (col, row, function, tmp_value, sheet) VALUES (?, ?, ?, ?, 0);", int(c), int(r), row[c], row[c]);
+        }
+    }
+}
 
 void renderSheet(
     std::unique_ptr<sqlitelib::Sqlite> &db,
@@ -1000,18 +1056,23 @@ void renderSheet(
 
             i++;
 
-            auto fpsstr = columnIndexToLetters(i);
-            auto strwidth = my_stbtt_print_width(fpsstr);
+            auto str = db->execute_value<std::string>("SELECT header FROM cols WHERE col_index = ?;", i);
+            if (str.empty())
+            {
+                str = columnIndexToLetters(i);
+            }
+
+            auto strwidth = my_stbtt_print_width(str);
 
             my_stbtt_print(
                 fromx + ((x - fromx) / 2.0f) - (strwidth / 2.0f),
                 input_line_h + fontSize * 1.2f,
-                fpsstr,
+                str,
                 glm::vec4(0.3f, 0.3f, 0.3f, 1.0f));
         }
 
         // Render row #
-        i = scroll_rows, x = 0, y = input_line_h + header_h;
+        i = scroll_rows, y = input_line_h + header_h;
         while (y < h)
         {
             glVertex2f(0.0f, float(y));
@@ -1070,20 +1131,25 @@ void renderSheet(
         // Render selected col header
         glBegin(GL_TRIANGLE_FAN);
         glColor3f(0.4f, 0.55f, 0.65f);
-        glVertex2f(selected_x, input_line_h);
-        glVertex2f(selected_x + selected_w, input_line_h);
-        glVertex2f(selected_x + selected_w, input_line_h + header_h);
-        glVertex2f(selected_x, input_line_h + header_h);
+        glVertex2f(float(selected_x), float(input_line_h));
+        glVertex2f(float(selected_x) + float(selected_w), float(input_line_h));
+        glVertex2f(float(selected_x) + float(selected_w), float(input_line_h) + float(header_h));
+        glVertex2f(float(selected_x), float(input_line_h) + float(header_h));
         glEnd();
 
         {
-            auto fpsstr = columnIndexToLetters(active_cell_col + 1);
-            auto strwidth = my_stbtt_print_width(fpsstr);
+            auto str = db->execute_value<std::string>("SELECT header FROM cols WHERE col_index = ?;", active_cell_col + 1);
+            if (str.empty())
+            {
+                str = columnIndexToLetters(active_cell_col + 1);
+            }
+
+            auto strwidth = my_stbtt_print_width(str);
 
             my_stbtt_print(
                 selected_x + (selected_w / 2.0f) - (strwidth / 2.0f),
                 input_line_h + fontSize * 1.2f,
-                fpsstr,
+                str,
                 glm::vec4(1.0f, 1.0f, 1.0, 1.0f));
         }
 
@@ -1151,7 +1217,53 @@ int main(
     (void)argc;
     (void)argv;
 
+    std::string fileNameToOpen;
+    bool fileNameFirstLineHeader = false;
+
+    if (argc > 1)
+    {
+        for (int i = 1; i < argc; i++)
+        {
+            std::string arg(argv[i]);
+
+            if (arg == "--open-csv-with-first-line-header")
+            {
+                if (!fileNameToOpen.empty())
+                {
+                    std::cerr << "Found --open-csv-with-first-line-header, but already parsed a file name from command line" << std::endl;
+                    return 1;
+                }
+
+                if (i + 1 >= argc)
+                {
+                    std::cerr << "Found --open-csv-with-first-line-header, but missing file argument" << std::endl;
+                    return 1;
+                }
+
+                i++;
+
+                fileNameToOpen = arg;
+                fileNameFirstLineHeader = true;
+
+                continue;
+            }
+            else
+            {
+                if (std::filesystem::exists(arg))
+                {
+                    fileNameToOpen = arg;
+                    fileNameFirstLineHeader = true; // TODO Maybe test the first line; when all cells are unique, its probably a header
+                }
+            }
+        }
+    }
+
     db = InitDb();
+
+    if (!fileNameToOpen.empty())
+    {
+        LoadFileIntoDb(fileNameToOpen, fileNameFirstLineHeader);
+    }
 
     glfwInit();
 

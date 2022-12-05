@@ -15,6 +15,7 @@ CPMAddPackage(
     GITHUB_REPOSITORY g-truc/glm
     GIT_TAG 0.9.9.7
 )
+
 CPMAddPackage(
     NAME glfw
     GITHUB_REPOSITORY glfw/glfw
@@ -23,4 +24,11 @@ CPMAddPackage(
         "GLFW_BUILD_EXAMPLES Off"
         "GLFW_BUILD_TESTS Off"
         "GLFW_BUILD_DOCS Off"
+)
+
+CPMAddPackage(
+    NAME rapidcsv
+    GITHUB_REPOSITORY d99kris/rapidcsv
+    VERSION 8.65
+    DOWNLOAD_ONLY YES
 )

@@ -49,6 +49,7 @@ target_sources(power-cells
 
 target_include_directories(power-cells
     PRIVATE include
+    PRIVATE ${rapidcsv_SOURCE_DIR}/src
 )
 
 target_compile_features(power-cells
